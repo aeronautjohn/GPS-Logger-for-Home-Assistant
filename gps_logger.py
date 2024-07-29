@@ -9,15 +9,28 @@ import queue
 from threading import Thread
 import json
 import os
+import logging
 
 class GPSLogger(hass.Hass):
 
     def initialize(self):
+        self._setup_config()
+        self._setup_database()
+        self._setup_previous_coordinates()
+        self._setup_queue_and_thread()
+        self._setup_listeners()
+
+        self.run_every(self.check_for_new_points, "now", 60)  # Check every 60 seconds
+
+        # Process any points in the temp log file on startup
+        self.process_temp_log()
+
+    def _setup_config(self):
         self.gps_lat_sensor = self.args["gps_lat_sensor"]
         self.gps_lon_sensor = self.args["gps_lon_sensor"]
-        self.db_host = self.args["db_host"]
-        self.db_user = self.args["db_user"]
-        self.db_password = self.args["db_password"]
+        self.db_host = os.getenv("DB_HOST", self.args["db_host"])
+        self.db_user = os.getenv("DB_USER", self.args["db_user"])
+        self.db_password = os.getenv("DB_PASSWORD", self.args["db_password"])
         self.db_name = self.args["db_name"]
         self.log_distance = self.args["log_distance"]
         self.route_distance = self.args["route_distance"]
@@ -25,7 +38,7 @@ class GPSLogger(hass.Hass):
         self.final_distance_threshold = 100  # Distance threshold to avoid perpetual routing
         self.temp_log_file = "/homeassistant/temp_gps_log.json"  # Temporary file for logging points
 
-        # Setup database connection pool
+    def _setup_database(self):
         self.db_pool = mysql.connector.pooling.MySQLConnectionPool(
             pool_name="gps_pool",
             pool_size=5,
@@ -35,7 +48,7 @@ class GPSLogger(hass.Hass):
             database=self.db_name
         )
 
-        # Fetch last coordinates on startup
+    def _setup_previous_coordinates(self):
         self.previous_latitude, self.previous_longitude = self.get_last_coordinates()
 
         if self.previous_latitude is not None and self.previous_longitude is not None:
@@ -43,21 +56,15 @@ class GPSLogger(hass.Hass):
         else:
             self.log("No previous coordinates found on startup")
 
-        # Setup the route queue and background thread
+    def _setup_queue_and_thread(self):
         self.route_queue = queue.Queue()
         self.background_thread = Thread(target=self.process_queue)
         self.background_thread.daemon = True
         self.background_thread.start()
 
-        # Listen for changes in GPS sensors
+    def _setup_listeners(self):
         self.listen_state(self.check_movement, self.gps_lat_sensor)
         self.listen_state(self.check_movement, self.gps_lon_sensor)
-
-        # Periodically check for new points added via SQL
-        self.run_every(self.check_for_new_points, "now", 60)  # Check every 60 seconds
-
-        # Process any points in the temp log file on startup
-        self.process_temp_log()
 
     def process_temp_log(self):
         if os.path.exists(self.temp_log_file):
@@ -114,32 +121,32 @@ class GPSLogger(hass.Hass):
 
     def get_new_coordinates(self):
         try:
-            conn = self.db_pool.get_connection()
-            cursor = conn.cursor()
-            cursor.execute("SELECT latitude, longitude, timestamp FROM gps_data ORDER BY timestamp DESC LIMIT 1")
-            row = cursor.fetchone()
-            cursor.close()
-            conn.close()
+            with self.db_pool.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("SELECT latitude, longitude, timestamp FROM gps_data ORDER BY timestamp DESC LIMIT 1")
+                    row = cursor.fetchone()
 
-            if row and (row[0] != self.previous_latitude or row[1] != self.previous_longitude):
-                return row[0], row[1], row[2]
-            else:
-                return None, None, None
+                    if row and (row[0] != self.previous_latitude or row[1] != self.previous_longitude):
+                        return row[0], row[1], row[2]
+                    else:
+                        return None, None, None
+        except mysql.connector.Error as db_err:
+            self.log(f"Database error fetching new coordinates: {db_err}", level="ERROR")
         except Exception as e:
-            self.log(f"Error fetching new coordinates: {e}", level="ERROR")
-            return None, None, None
+            self.log(f"Unexpected error fetching new coordinates: {e}", level="ERROR")
+        return None, None, None
 
     def delete_coordinate(self, lat, lon, timestamp):
         try:
-            conn = self.db_pool.get_connection()
-            cursor = conn.cursor()
-            cursor.execute("DELETE FROM gps_data WHERE latitude = %s AND longitude = %s AND timestamp = %s", (lat, lon, timestamp))
-            conn.commit()
-            cursor.close()
-            conn.close()
+            with self.db_pool.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("DELETE FROM gps_data WHERE latitude = %s AND longitude = %s AND timestamp = %s", (lat, lon, timestamp))
+                    conn.commit()
             self.log(f"Deleted coordinate ({lat}, {lon}) with timestamp {timestamp}")
+        except mysql.connector.Error as db_err:
+            self.log(f"Database error deleting coordinate: {db_err}", level="ERROR")
         except Exception as e:
-            self.log(f"Error deleting coordinate: {e}", level="ERROR")
+            self.log(f"Unexpected error deleting coordinate: {e}", level="ERROR")
 
     def haversine(self, lat1, lon1, lat2, lon2):
         R = 6371000  # Radius of the Earth in meters
@@ -155,33 +162,32 @@ class GPSLogger(hass.Hass):
 
     def get_last_coordinates(self):
         try:
-            conn = self.db_pool.get_connection()
-            cursor = conn.cursor()
-            cursor.execute("SELECT latitude, longitude FROM gps_data ORDER BY timestamp DESC LIMIT 1")
-            row = cursor.fetchone()
-            cursor.close()
-            conn.close()
+            with self.db_pool.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("SELECT latitude, longitude FROM gps_data ORDER BY timestamp DESC LIMIT 1")
+                    row = cursor.fetchone()
 
-            if row:
-                return row[0], row[1]
-            else:
-                return None, None
+                    if row:
+                        return row[0], row[1]
+                    else:
+                        return None, None
+        except mysql.connector.Error as db_err:
+            self.log(f"Database error fetching last coordinates: {db_err}", level="ERROR")
         except Exception as e:
-            self.log(f"Error fetching last coordinates: {e}", level="ERROR")
-            return None, None
+            self.log(f"Unexpected error fetching last coordinates: {e}", level="ERROR")
+        return None, None
+
     def add_coordinates_to_db(self, coordinates, timestamp=None):
         try:
-            conn = self.db_pool.get_connection()
-            cursor = conn.cursor()
-            for coordinate in coordinates:
-                if timestamp is None:
-                    timestamp = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
-                lat, lon = coordinate if len(coordinate) == 2 else coordinate[:2]
-                location = f"POINT({lon} {lat})"
-                cursor.execute("INSERT INTO gps_data (latitude, longitude, timestamp, location) VALUES (%s, %s, %s, ST_GeomFromText(%s))", (lat, lon, timestamp, location))
-            conn.commit()
-            cursor.close()
-            conn.close()
+            with self.db_pool.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    for coordinate in coordinates:
+                        if timestamp is None:
+                            timestamp = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+                        lat, lon = coordinate if len(coordinate) == 2 else coordinate[:2]
+                        location = f"POINT({lon} {lat})"
+                        cursor.execute("INSERT INTO gps_data (latitude, longitude, timestamp, location) VALUES (%s, %s, %s, ST_GeomFromText(%s))", (lat, lon, timestamp, location))
+                    conn.commit()
             self.log(f"Inserted {len(coordinates)} coordinates at {timestamp}")
 
             # Update the previous coordinates with the most recent logged point
@@ -189,8 +195,10 @@ class GPSLogger(hass.Hass):
                 self.previous_latitude = coordinates[-1][0]
                 self.previous_longitude = coordinates[-1][1]
                 self.log(f"Updated previous coordinates to ({self.previous_latitude}, {self.previous_longitude})")
+        except mysql.connector.Error as db_err:
+            self.log(f"Database error inserting coordinates: {db_err}", level="ERROR")
         except Exception as e:
-            self.log(f"Error inserting coordinates: {e}", level="ERROR")
+            self.log(f"Unexpected error inserting coordinates: {e}", level="ERROR")
 
     async def fetch_route(self, start_lat, start_lon, end_lat, end_lon):
         try:
@@ -201,9 +209,11 @@ class GPSLogger(hass.Hass):
                     data = await response.json()
                     route = data['routes'][0]['geometry']['coordinates']
                     return [(lat, lon) for lon, lat in route]
+        except aiohttp.ClientError as aio_err:
+            self.log(f"HTTP error fetching route: {aio_err}", level="ERROR")
         except Exception as e:
-            self.log(f"Error fetching route: {e}", level="ERROR")
-            return None
+            self.log(f"Unexpected error fetching route: {e}", level="ERROR")
+        return [(start_lat, start_lon), (end_lat, end_lon)]  # Return a simple start-end point route
 
     def process_queue(self):
         loop = asyncio.new_event_loop()
