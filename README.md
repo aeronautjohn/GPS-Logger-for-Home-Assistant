@@ -16,7 +16,7 @@ You will need to install the following Add-Ons in Home Assistant:
 
 2. Using phpMyAdmin, connect to your MariaDB server and create a new database. Create a user named ‘homeassistant’.
 
-3. Locate your AppDaemon Apps folder. By default, it is found at /addon_configs/a0d7b954_appdaemon/apps
+3. Locate your AppDaemon Apps folder. By default, it is found at /addon_configs/xxxxxxxx_appdaemon/apps
 
 4. Add `gps_logger.py` to the apps folder.
 
