@@ -1,6 +1,8 @@
 ## GPS Logger
 This is a simple app that logs GPS points to a MySQL database, but with a few smart features. For example, it only logs points if they're actually far enough from the most recently logged point to 'matter'. There's also integrated intelligent routing to 'fill in the blanks' between logged points for visualization later.
 
+Installation instructions and an example visualization configuration is included in the Wiki.
+
 ## Prequisites:
 
 You will need to install the following Add-Ons in Home Assistant:
