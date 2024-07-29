@@ -1,0 +1,11 @@
+GPSLogger:
+  module: gps_logger
+  class: GPSLogger
+  gps_lat_sensor: sensor.gps_latitude
+  gps_lon_sensor: sensor.gps_longitude
+  db_host: core-mariadb
+  db_user: [DBUSER]
+  db_password: [DBPASSWORD]
+  db_name: [DBNAME]
+  log_distance: 25
+  route_distance: 50
