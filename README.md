@@ -28,12 +28,13 @@ GPSLogger:
   class: GPSLogger
   gps_lat_sensor: sensor.your_latitude_sensor
   gps_lon_sensor: sensor.your_longitude_sensor
+  gps_speed_sensor: sensor.your_speed_sensor
   db_host: core-mariadb #Default for MariaDB
   db_user: homeassistant
   db_password: YOURDBPASSWORD
   db_name: YOURDBNAME
-  log_distance: 25
-  route_distance:50
+  speed_threshold: 5 # Default value. Uses whatever unit your GPS speed sensor outputs, so adjust accordingly
+  route_distance: 150 # In meters. If a new point is logged and is further than this distance from the original, it'll calculate a route and log intermediate points
 
 ```
 
